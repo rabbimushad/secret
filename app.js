@@ -18,8 +18,12 @@ const mongoose = require('mongoose')
 // Level 5 passport.js
 const session = require('express-session');
 const passport = require('passport')
-const passportLocalMongoose = require('passport-local-mongoose')
+const passportLocalMongoose = require('passport-local-mongoose');
 
+// Level-6 Google OAuth2.0 _start
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const findOrCreate = require('mongoose-findorcreate');
+// Level-6 Google OAuth2.0 _end
 const app = express();
 
 app.use(express.static('public'));
@@ -45,11 +49,16 @@ mongoose.connect(mongoURI, { useNewUrlParser: true })
 //  MOngoose step -2 (Create schema)
 const userSchema = new mongoose.Schema({
     email:String,
-    password:String
+    password:String,
+    googleId:String,
+    secrets:String
 })
 
 // Level 5 passport.js 
 userSchema.plugin(passportLocalMongoose);
+
+// Level 6 Google OAuth2.0 
+userSchema.plugin(findOrCreate);
 
 // Level-2 (encryption)
 // const secret = process.env.SECRET
@@ -59,15 +68,58 @@ userSchema.plugin(passportLocalMongoose);
 //  Mongoose step -3 (Create Model)
 const User = new mongoose.model("User",userSchema);
 
-// Level 5 passport.js - start
+// Level 5 passport.js - Start
 passport.use(User.createStrategy());
-passport.serializeUser(User.serializeUser());
-passport.deserializeUser(User.deserializeUser());
+// passport.serializeUser(User.serializeUser());
+// passport.deserializeUser(User.deserializeUser());
 // Level 5 passport.js - end
+
+// Level-6 Google OAuth2.0 -  Start  (Work for all serilization and deserialization)
+passport.serializeUser(function(user, cb) {
+    process.nextTick(function() {
+      cb(null, { id: user.id, username: user.username });
+    });
+  });
+  
+  passport.deserializeUser(function(user, cb) {
+    process.nextTick(function() {
+      return cb(null, user);
+    });
+  });
+// Level-6 Google OAuth2.0 -  End  (Work for all serilization and deserialization)
+
+// Level-6 Google OAuth2.0 -  Start
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,
+    clientSecret: process.env.CLIENT_SECRET,
+    callbackURL: "http://localhost:3000/auth/google/secrets"
+  },
+  function(accessToken, refreshToken, profile, cb) {
+    console.log(profile)
+    // npm pkg mongoose_findorcreate
+    User.findOrCreate({ googleId: profile.id }, function (err, user) {
+      return cb(err, user);
+    });
+  }
+));
+// Level-6 Google OAuth2.0 - End
 
 
 app.get('/',(req,res) => {
     res.render ('home')});
+
+// Level-6 Google OAuth2.0 Start
+app.get('/auth/google',
+    passport.authenticate('google', { scope: ['profile'] }));
+
+app.get('/auth/google/secrets', 
+    passport.authenticate('google', { failureRedirect: '/login' }),
+    function(req, res) {
+      // Successful authentication, redirect secrets page/reqr page.
+      res.redirect('/secrets');
+    });
+
+// Level-6 Google OAuth2.0 - End
 
 app.get ('/login',(req,res) => {
     res.render('login')
@@ -78,12 +130,42 @@ app.get('/register',(req,res) => {
 })
 
 app.get('/secrets',(req,res) => {
-    // Websecurity method to check authenticity.
-    if(req.isAuthenticated()){
-        res.render('secrets');
-    }else {
-        res.redirect('/login');
+   User.find({'secrets':{$ne:null}},(err,foundUsers) => {
+    if(err){
+        console.log(err);
+    }else{
+        if(foundUsers){
+            res.render('secrets',{usersWithSecrets:foundUsers})
+        }
     }
+   }) 
+})
+
+app.get('/submit',(req,res) => {
+     // Websecurity method to check authenticity.
+    if(req.isAuthenticated()){
+        res.render('submit');
+    }else{
+        res.redirect('/login')
+    }
+})
+
+app.post('/submit',(req,res) => {
+    const submittdSecret = req.body.secret;
+    // Mongoose query function
+    User.findById(req.user.id,(err,foundUser)=> {
+        if(err){
+            console.log(err)
+        }else {
+            if(foundUser){
+                foundUser.secrets =  submittdSecret;
+                foundUser.save(()=> {
+                    res.redirect('/secrets');
+                })
+            }
+        }
+    })
+
 })
 
 app.get('/logout',(req,res)=> {
